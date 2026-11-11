@@ -3520,6 +3520,103 @@ export function effectiveJevModel(pin: unknown, chainModel: string): string {
   return chainModel
 }
 
+/**
+ * Parses the `fallbacks` plugin option into an ordered judgment-model chain:
+ * the effective primary first, then every configured fallback, trimmed and
+ * de-duplicated in order. Invalid shapes warn instead of throwing; an empty
+ * or malformed option keeps the single primary so behavior matches a config
+ * that never set it.
+ */
+export function parseModelChain(
+  raw: unknown,
+  primary: string,
+): { models: string[]; warnings: string[] } {
+  const models: string[] = []
+  const warnings: string[] = []
+  const add = (value: string) => {
+    const id = value.trim()
+    if (id && !models.includes(id)) models.push(id)
+  }
+  add(primary)
+  if (raw === undefined) return { models, warnings }
+  if (!Array.isArray(raw)) {
+    warnings.push(`"fallbacks" must be an array of model ids - ignored`)
+    return { models, warnings }
+  }
+  for (const entry of raw) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      warnings.push(`"fallbacks" entries must be non-empty strings - ignored`)
+      continue
+    }
+    add(entry)
+  }
+  return { models, warnings }
+}
+
+/** One deployment verdict, structurally compatible with the host-side
+ * DeployVerdict (kept local so logic.ts stays host-free). */
+export interface ModelVerdictLike {
+  ok: boolean
+  fault?: { surface?: string; message?: string }
+}
+
+export interface ModelChainOptions<T> {
+  /** Ping verdict for one model; a faulted entry is skipped without a judged call. */
+  verify: (model: string) => Promise<ModelVerdictLike>
+  /** One judged attempt against a verified model. */
+  run: (model: string) => Promise<T>
+  /** Whether the failure is worth retrying on the next model (rate limits,
+   * funds, outages, network errors). Credential and gate failures are not. */
+  retryable?: (error: unknown) => boolean
+  /** Caller cancellation: never advance after the host aborted the call. */
+  aborted?: () => boolean
+  /** Called for each model skipped by its ping verdict. */
+  skip?: (model: string, reason: string) => void
+  /** Called when a retryable failure advances to the next model. */
+  fallback?: (from: string, to: string, error: unknown) => void
+}
+
+/**
+ * Walks a judgment-model chain. Members whose deployment ping failed (or that
+ * are cooling down) are skipped; the first healthy member runs. A retryable
+ * judged failure advances to the next member, while credential, gate, model
+ * and caller-abort failures surface immediately. When every member fails,
+ * the first attempted member's diagnostic is thrown, preserving the
+ * fail-closed wording a single-model config surfaces today.
+ */
+export async function runModelChain<T>(
+  models: readonly string[],
+  options: ModelChainOptions<T>,
+): Promise<{ value: T; model: string }> {
+  if (models.length === 0) throw new Error("jev: no judgment model configured")
+  const retryable = options.retryable ?? (() => false)
+  let primaryFault: Error | undefined
+  const failures: Error[] = []
+  for (let index = 0; index < models.length; index += 1) {
+    const model = models[index]!
+    const verdict = await options.verify(model)
+    if (!verdict.ok) {
+      const reason =
+        verdict.fault?.surface ?? verdict.fault?.message ?? `model ${model} is unavailable`
+      if (index === 0) primaryFault = new Error(reason)
+      options.skip?.(model, reason)
+      continue
+    }
+    try {
+      const value = await options.run(model)
+      return { value, model }
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err))
+      failures.push(error)
+      if (!retryable(err) || options.aborted?.()) throw error
+      const next = models[index + 1]
+      if (!next) break
+      options.fallback?.(model, next, error)
+    }
+  }
+  throw primaryFault ?? failures[0] ?? new Error(`jev: no judgment model available (${models.join(", ")})`)
+}
+
 /** Short display form for the footer marker and toasts: strips the redundant
  * "jev-" prefix (jev-1.13-free shows as "(jev:1.13-free)") and keeps custom
  * ids verbatim. Empty input yields "" so a marker slot can skip rendering. */
@@ -3795,6 +3892,27 @@ export function classifyJevFailure(message: unknown): JevFailureClass {
                 ? "outage"
                 : "unknown"
   return { status, detail, kind }
+}
+
+/**
+ * Whether a failed judged call may advance to the next fallback model:
+ * rate limits, exhausted funds (a free model may still answer), upstream
+ * outages, request timeouts, and network-level failures. Credential (401),
+ * gate (403) and unknown-model (400) failures are deployment-wide and stay
+ * fail-closed; caller aborts are handled by runModelChain, not this class.
+ */
+export function judgeFailureRetryable(message: unknown): boolean {
+  const text =
+    typeof message === "string" ? message : String((message as any)?.message ?? message ?? "")
+  const { status, kind } = classifyJevFailure(text)
+  if (kind === "credential" || kind === "gate" || kind === "model") return false
+  if (kind === "funds" || kind === "outage") return true
+  if (status !== undefined) {
+    return status === 402 || status === 408 || status === 425 || status === 429 || status >= 500
+  }
+  return /fetch failed|network|connection|ECONN|ETIMEDOUT|ENOTFOUND|socket|timed? ?out|upstream unavailable|upstream failed|service unavailable/i.test(
+    text,
+  )
 }
 
 export interface DeploymentFault {

@@ -1093,3 +1093,30 @@ That surfaced row then moved to the `screen` RPC event (see "Context
 hygiene"): the diagnostic toasts in the TUI without a transcript row, and
 only hosts without an event surface still write the row.
 
+## Judgment model fallbacks: same deployment, retryable failures only
+
+The single-model configuration made a transient 429 or a removed model
+take every judged feature down until the plugin restarted. The optional
+`fallbacks` list adds an ordered chain behind the effective primary
+(session pin, then `model` / `JEV_MODEL` / default) without weakening the
+fail-closed stance:
+
+- Every member comes from the same `provider` resolution, endpoint, and
+  credential chain. A 401/403 cannot be fixed by another model, so it
+  surfaces immediately; so does a model-relative 400 and a caller abort.
+  There is still no fallback between deployments.
+- Only retryable failures advance: 402 (a free fallback may still answer),
+  408/425/429, 5xx/outage, and network or timeout errors. The classification
+  is `judgeFailureRetryable` over the same `classifyJevFailure` vocabulary
+  the init check and error rows use.
+- The whole chain is ping-verified at startup. A member that does not answer
+  is cached as faulted and skipped; the init config fault fires only when no
+  member answers, and it keeps the primary's wording.
+- A judged call that fails retryably demotes that model for 60 seconds, so a
+  rate-limited primary is not re-hit on every turn. The last member is always
+  attempted - something has to run.
+- The first retryable failure advances and emits one warning toast per
+  session and model pair, naming both models. If the chain is exhausted, the
+  primary's diagnostic is thrown, so single-model callers see exactly the
+  failure they saw before.
+

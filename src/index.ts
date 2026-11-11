@@ -123,6 +123,9 @@ import {
   doneTranscript,
   doneVerdict,
   effectiveJevModel,
+  parseModelChain,
+  runModelChain,
+  judgeFailureRetryable,
   emergencyRealModel,
   effortRoutingEnabled,
   effectiveEffortMode,
@@ -459,6 +462,10 @@ function resolveEndpoint(): string {
 
 // Options-set model wins over the env; both precede the baked default.
 let OPTIONS_MODEL: string | undefined = undefined
+// Ordered fallback models for judgments (the `fallbacks` plugin option). The
+// chain is always [effective primary, ...OPTIONS_FALLBACKS], so a session pin
+// replaces the primary without losing the fallback safety net.
+let OPTIONS_FALLBACKS: string[] = []
 
 // Selected jev deployment, set once by the init resolution (see
 // resolveDeploymentEndpoint): a Console id keeps the OpenCode System One
@@ -1661,6 +1668,14 @@ export default Plugin.define({
       OPTIONS_MODEL = modelOption
       console.log(`[jev] model: ${modelOption} (from plugin options)`)
     }
+    const modelChain = parseModelChain(o.fallbacks, resolveModel())
+    OPTIONS_FALLBACKS = modelChain.models.slice(1)
+    for (const warning of modelChain.warnings) console.log(`[jev] fallbacks: ${warning}`)
+    if (OPTIONS_FALLBACKS.length > 0) {
+      console.log(
+        `[jev] fallbacks: ${OPTIONS_FALLBACKS.join(", ")} (tried in order on retryable failures)`,
+      )
+    }
     const providerOption = parseProviderOption(o.provider)
     if (o.provider !== undefined && !providerOption) {
       console.log(
@@ -1707,13 +1722,38 @@ export default Plugin.define({
         ? { ok: true, at: new Date().toISOString() }
         : { ok: false, fault: deployCheck.fault, at: new Date().toISOString() },
     )
+    // Fallback members are ping-verified at startup too, so a dead primary
+    // (rate limit, removed model, funds) is skipped without paying a failed
+    // judged call on every turn. Credential, gate, and no-endpoint faults are
+    // deployment-wide: pinging the rest cannot help.
+    const deploymentWideFault =
+      !deployCheck.ok &&
+      ["credential", "gate", "no-credential", "no-endpoint"].includes(deployCheck.fault.kind)
+    const fallbackHealth: Array<{ model: string; ok: boolean }> = []
+    if (!deploymentWideFault) {
+      for (const model of OPTIONS_FALLBACKS) {
+        const check = await checkDeployState(model)
+        DEPLOY_VERDICTS.set(
+          check.fingerprint,
+          check.ok
+            ? { ok: true, at: new Date().toISOString() }
+            : { ok: false, fault: check.fault, at: new Date().toISOString() },
+        )
+        fallbackHealth.push({ model, ok: check.ok })
+        if (!check.ok) {
+          console.log(`[jev] init: fallback ${model} unavailable - ${check.fault.message}`)
+        }
+      }
+    }
+    const healthyFallback = fallbackHealth.find((entry) => entry.ok)?.model
+    const chainOk = deployCheck.ok || healthyFallback !== undefined
     // Buffered init fault: the deployment check runs before the RPC
     // registration exists, so its message is delivered event-first below.
     // The stored entry is also what late subscribers read via configFault().
     let pendingConfigFault: { message: string; fingerprint: string } | undefined = undefined
     try {
       const faultKey = "jev-init-fault"
-      if (!deployCheck.ok) {
+      if (!chainOk) {
         const fault = deployCheck.fault
         console.log(`[jev] init: judged features fail closed - ${fault.message}`)
         const prev: any = await (ctx as any).storage?.get?.(faultKey)
@@ -1740,8 +1780,13 @@ export default Plugin.define({
       // Surfacing must never take the plugin down; the fault stays console-only.
       console.error(`[jev] init: config-fault surfacing skipped (${String((err as Error)?.message ?? err)})`)
     }
-    if (deployCheck.ok) {
-      console.log(`[jev] init: deployment ok - ${resolveModel()} @ ${deployHost(resolveEndpoint())}`)
+    if (chainOk) {
+      const active = deployCheck.ok ? resolveModel() : healthyFallback!
+      console.log(
+        `[jev] init: deployment ok - ${active} @ ${deployHost(resolveEndpoint())}${
+          deployCheck.ok ? "" : ` (primary ${resolveModel()} unavailable; serving from the fallback chain)`
+        }`,
+      )
     }
     const screenEnabled = o.screen?.enabled !== false
     const screenMode = parseScreenMode(o.screen?.mode)
@@ -2081,36 +2126,81 @@ export default Plugin.define({
       return model || undefined
     }
 
+    // A retryable judged failure demotes that model briefly, so a rate-limited
+    // primary does not cost an extra failed request on every turn. The last
+    // chain member is always attempted (something has to run).
+    const MODEL_COOLDOWN_MS = 60_000
+    const modelCooldowns = new Map<string, number>()
+    const warnedFallbacks = new Set<string>()
+
     async function cachedJudge(
       questions: Question[],
       state: unknown,
       signal?: AbortSignal,
       sessionID?: string,
-    ): Promise<{ reply: JevReply; cached: boolean }> {
-      // Deployment gate for the model this call actually uses: a session pin
-      // (/jev-models) overrides the chain per the picker contract, and every
-      // verdict (including the pin's target) is verified with a ping before
-      // anything rides it. Unresolved host ids get one post-boot re-resolve
-      // attempt first - the registry may now contain the locally configured
-      // provider.
-      const model = effectiveJevModel(sessionID ? await pinOf(sessionID) : undefined, resolveModel())
+    ): Promise<{ reply: JevReply; cached: boolean; model: string }> {
+      // The chain is the effective primary (a session pin wins over the
+      // options/env/default) followed by the configured fallbacks. Every
+      // member is deployment-verified; a retryable failure advances, a
+      // credential/gate/model fault or a caller abort stays fail-closed.
+      const primary = effectiveJevModel(
+        sessionID ? await pinOf(sessionID) : undefined,
+        resolveModel(),
+      )
+      const chain = parseModelChain(OPTIONS_FALLBACKS, primary).models
       if (!RESOLVED_ENDPOINT) await lateResolveDeployment()
-      const verdict = await deployVerdict(model)
-      if (!verdict.ok) throw new Error(verdict.fault?.surface ?? "jev: deployment fault")
-      const endpoint = resolveEndpoint()
-      if (!cacheEnabled) return { reply: await jevJudge(questions, state, signal, model), cached: false }
-      const key = `judgment/${createHash("sha256")
-        .update(JSON.stringify({ endpoint, model, state, questions: toQuestionMap(questions) }))
-        .digest("hex")}`
-      const hit = await (ctx as any).storage.get(key)
-      if (hit && hit.answers && typeof hit.answers === "object") {
-        JUDGMENT_CACHE_STATS.hits += 1
-        return { reply: hit as JevReply, cached: true }
+      const now = Date.now()
+      const runnable = chain.filter((model, index) => {
+        if (index === chain.length - 1) return true
+        const until = modelCooldowns.get(model) ?? 0
+        if (until <= now) return true
+        console.log(
+          `[jev] fallbacks: ${model} cooling down for ${Math.ceil((until - now) / 1000)}s`,
+        )
+        return false
+      })
+      const outcome = await runModelChain(runnable, {
+        verify: (model) => deployVerdict(model),
+        run: async (model) => {
+          if (!cacheEnabled) return { reply: await jevJudge(questions, state, signal, model), cached: false }
+          const endpoint = resolveEndpoint()
+          const key = `judgment/${createHash("sha256")
+            .update(JSON.stringify({ endpoint, model, state, questions: toQuestionMap(questions) }))
+            .digest("hex")}`
+          const hit = await (ctx as any).storage.get(key)
+          if (hit && hit.answers && typeof hit.answers === "object") {
+            JUDGMENT_CACHE_STATS.hits += 1
+            return { reply: hit as JevReply, cached: true }
+          }
+          const reply = await jevJudge(questions, state, signal, model)
+          JUDGMENT_CACHE_STATS.misses += 1
+          await (ctx as any).storage.set(key, reply)
+          return { reply, cached: false }
+        },
+        retryable: judgeFailureRetryable,
+        aborted: () => signal?.aborted === true,
+        skip: (model, reason) => {
+          console.log(`[jev] fallbacks: skipping ${model} - ${reason}`)
+        },
+        fallback: (from, to, err) => {
+          modelCooldowns.set(from, Date.now() + MODEL_COOLDOWN_MS)
+          const detail = surfaceTitle(err) || "judgment failed"
+          console.log(`[jev] fallbacks: ${from} failed (${detail}) - trying ${to}`)
+        },
+      })
+      modelCooldowns.delete(outcome.model)
+      if (outcome.model !== primary) {
+        const warnKey = `${sessionID ?? ""}|${primary}|${outcome.model}`
+        if (!warnedFallbacks.has(warnKey)) {
+          if (warnedFallbacks.size > 1000) warnedFallbacks.clear()
+          warnedFallbacks.add(warnKey)
+          console.log(`[jev] fallbacks: serving judgments with ${outcome.model}`)
+          emitJevWarning(
+            `jev: judgment model ${primary} is unavailable; using ${outcome.model}`,
+          )
+        }
       }
-      const reply = await jevJudge(questions, state, signal, model)
-      JUDGMENT_CACHE_STATS.misses += 1
-      await (ctx as any).storage.set(key, reply)
-      return { reply, cached: false }
+      return { reply: outcome.value.reply, cached: outcome.value.cached, model: outcome.model }
     }
 
     // runScreen dep: cachedJudge's reply shaped as { answers, cached }. The
@@ -2351,7 +2441,13 @@ export default Plugin.define({
               const sessionID = typeof input?.sessionID === "string" ? input.sessionID : ""
               const pick = sessionID ? await pinOf(sessionID) : undefined
               const effective = pick || resolveModel()
-              const verdict = DEPLOY_VERDICTS.get(fingerprintOfModel(effective))
+              // Health reflects the whole judgment chain: a dead primary with a
+              // healthy fallback still serves judgments.
+              const statusChain = parseModelChain(OPTIONS_FALLBACKS, effective).models
+              const primaryVerdict = DEPLOY_VERDICTS.get(fingerprintOfModel(effective))
+              const healthyModel = statusChain.find(
+                (model) => DEPLOY_VERDICTS.get(fingerprintOfModel(model))?.ok === true,
+              )
               let session: JevStatusInfo["session"] | undefined
               let doneNudges: number | undefined
               let agentFloor = 0
@@ -2434,12 +2530,12 @@ export default Plugin.define({
                 ...(session ? { session } : {}),
                 ...(auth ? { auth } : {}),
                 health: {
-                  ok: verdict?.ok === true,
+                  ok: healthyModel !== undefined,
                   events: typeof (rpcRegistration as any)?.events?.emit === "function",
-                  ...(verdict?.at ? { checkedAt: verdict.at } : {}),
-                  ...(verdict && !verdict.ok && verdict.fault?.message
-                    ? { fault: verdict.fault.message }
-                    : !verdict
+                  ...(primaryVerdict?.at ? { checkedAt: primaryVerdict.at } : {}),
+                  ...(primaryVerdict && !primaryVerdict.ok && primaryVerdict.fault?.message
+                    ? { fault: primaryVerdict.fault.message }
+                    : !primaryVerdict
                       ? { fault: "deployment not checked yet" }
                       : {}),
                 },

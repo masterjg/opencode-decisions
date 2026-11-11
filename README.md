@@ -90,6 +90,7 @@ Screening, scrubbing, the judgment tools (including `jev_find`), and the command
       "package": "github:atvari-eu/opencode-decisions",
       "options": {
         "model": "jev-1.13",           // judgment model (default: jev-1.13-free, or JEV_MODEL)
+        "fallbacks": ["jev-1.13-free"], // optional retry chain on the same deployment
         "routes": {                    // routing meta models (default + review are built in)
           "default": {
             "candidates": ["openrouter/anthropic/claude-3.5-haiku", "anthropic/claude-sonnet-4"],
@@ -123,6 +124,7 @@ Screening, scrubbing, the judgment tools (including `jev_find`), and the command
 | `commands` | on | [Tools & commands](docs/tools.md) |
 | `cache` | on | [Tools & commands](docs/tools.md) |
 | `model` | `JEV_MODEL` env / `jev-1.13-free` | [Provider](docs/provider.md) |
+| `fallbacks` | none | [Provider](docs/provider.md#judgment-model-fallbacks) |
 | `provider` | `"opencode"` (Console) | [Provider](docs/provider.md) |
 | `routes` | `{ "default": {}, "review": {} }`; extra keys become picker entries; each entry's Console cut inlines under `pool` | [Model routing](docs/routing.md) |
 | `agents` | `{ "build": {}, "plan": {}, "explore": {} }`; extra keys become agent profiles | [Model routing](docs/routing.md#agent-profiles) |
@@ -136,7 +138,7 @@ Screening, scrubbing, the judgment tools (including `jev_find`), and the command
 
 ## Guarantees
 
-- **Fail-closed**: a missing credential, judge failure, timeout, or malformed answer never produces a "successful" judgment. Faults surface as toasts, never as a silently guessed endpoint or a fallback between deployments.
+- **Fail-closed**: a missing credential, judge failure, timeout, or malformed answer never produces a "successful" judgment. Faults surface as toasts, never as a silently guessed endpoint or a fallback between deployments. The optional model `fallbacks` chain stays on one deployment and only advances on retryable failures (rate limits, funds, outages); credential, gate, and unknown-model faults surface immediately.
 - Secret scrubbing is deterministic regex, applied to screening, tool inputs, prompts, and compaction state alike.
 - The cache stores answers and usage only - never the judged content.
 - User prompt text is never edited for instructions (scrub aside); guidance lives in the tool descriptions.
