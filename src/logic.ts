@@ -3583,6 +3583,19 @@ export function parseFallbackCooldownMs(raw: unknown): { ms: number; warning?: s
   return { ms: floored }
 }
 
+/**
+ * Parses the `fallbackNotify` option. It defaults to true and only controls
+ * the "using fallback" warning toast; failures that exhaust the chain still
+ * surface through the normal error path.
+ */
+export function parseFallbackNotify(raw: unknown): { enabled: boolean; warning?: string } {
+  if (raw === undefined) return { enabled: true }
+  if (typeof raw !== "boolean") {
+    return { enabled: true, warning: `"fallbackNotify" must be a boolean - keeping true` }
+  }
+  return { enabled: raw }
+}
+
 /** One deployment verdict, structurally compatible with the host-side
  * DeployVerdict (kept local so logic.ts stays host-free). */
 export interface ModelVerdictLike {

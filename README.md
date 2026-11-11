@@ -92,6 +92,7 @@ Screening, scrubbing, the judgment tools (including `jev_find`), and the command
         "model": "jev-1.13",           // judgment model (default: jev-1.13-free, or JEV_MODEL)
         "fallbacks": ["jev-1.13-free"], // optional retry chain on the same deployment
         "fallbackCooldownMs": 3600000, // 1 h; 0 retries the failed model on the next call
+        "fallbackNotify": true,        // false silences the "using fallback" warning
         "routes": {                    // routing meta models (default + review are built in)
           "default": {
             "candidates": ["openrouter/anthropic/claude-3.5-haiku", "anthropic/claude-sonnet-4"],
@@ -127,6 +128,7 @@ Screening, scrubbing, the judgment tools (including `jev_find`), and the command
 | `model` | `JEV_MODEL` env / `jev-1.13-free` | [Provider](docs/provider.md) |
 | `fallbacks` | none | [Provider](docs/provider.md#judgment-model-fallbacks) |
 | `fallbackCooldownMs` | `3600000` (1 h) | [Provider](docs/provider.md#judgment-model-fallbacks) |
+| `fallbackNotify` | `true` | [Provider](docs/provider.md#judgment-model-fallbacks) |
 | `provider` | `"opencode"` (Console) | [Provider](docs/provider.md) |
 | `routes` | `{ "default": {}, "review": {} }`; extra keys become picker entries; each entry's Console cut inlines under `pool` | [Model routing](docs/routing.md) |
 | `agents` | `{ "build": {}, "plan": {}, "explore": {} }`; extra keys become agent profiles | [Model routing](docs/routing.md#agent-profiles) |

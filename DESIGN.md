@@ -1117,7 +1117,7 @@ fail-closed stance:
   not re-hit on every turn. The last member is always attempted - something has
   to run.
 - The first retryable failure advances and emits one warning toast per
-  session and model pair, naming both models. If the chain is exhausted, the
-  primary's diagnostic is thrown, so single-model callers see exactly the
-  failure they saw before.
+  session and model pair, naming both models; `fallbackNotify: false`
+  suppresses that toast. If the chain is exhausted, the primary's diagnostic
+  is thrown, so single-model callers see exactly the failure they saw before.
 

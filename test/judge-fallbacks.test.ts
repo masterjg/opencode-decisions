@@ -8,6 +8,7 @@ import {
   FALLBACK_COOLDOWN_MS_MAX,
   judgeFailureRetryable,
   parseFallbackCooldownMs,
+  parseFallbackNotify,
   parseModelChain,
   runModelChain,
   type ModelVerdictLike,
@@ -80,6 +81,22 @@ describe("parseFallbackCooldownMs", () => {
     const parsed = parseFallbackCooldownMs(FALLBACK_COOLDOWN_MS_MAX + 1)
     expect(parsed.ms).toBe(FALLBACK_COOLDOWN_MS_MAX)
     expect(parsed.warning).toContain("clamped")
+  })
+})
+
+describe("parseFallbackNotify", () => {
+  test("defaults to true and accepts booleans", () => {
+    expect(parseFallbackNotify(undefined)).toEqual({ enabled: true })
+    expect(parseFallbackNotify(true)).toEqual({ enabled: true })
+    expect(parseFallbackNotify(false)).toEqual({ enabled: false })
+  })
+
+  test("invalid values keep true and warn", () => {
+    for (const raw of ["false", 0, null]) {
+      const parsed = parseFallbackNotify(raw)
+      expect(parsed.enabled).toBe(true)
+      expect(parsed.warning).toContain("boolean")
+    }
   })
 })
 

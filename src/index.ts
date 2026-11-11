@@ -125,6 +125,7 @@ import {
   effectiveJevModel,
   parseModelChain,
   parseFallbackCooldownMs,
+  parseFallbackNotify,
   runModelChain,
   judgeFailureRetryable,
   emergencyRealModel,
@@ -1673,8 +1674,10 @@ export default Plugin.define({
     OPTIONS_FALLBACKS = modelChain.models.slice(1)
     const fallbackCooldown = parseFallbackCooldownMs(o.fallbackCooldownMs)
     const fallbackCooldownMs = fallbackCooldown.ms
+    const fallbackNotify = parseFallbackNotify(o.fallbackNotify)
     for (const warning of modelChain.warnings) console.log(`[jev] fallbacks: ${warning}`)
     if (fallbackCooldown.warning) console.log(`[jev] fallbacks: ${fallbackCooldown.warning}`)
+    if (fallbackNotify.warning) console.log(`[jev] fallbacks: ${fallbackNotify.warning}`)
     if (OPTIONS_FALLBACKS.length > 0) {
       console.log(
         `[jev] fallbacks: ${OPTIONS_FALLBACKS.join(", ")} (tried in order on retryable failures; cooldown ${fallbackCooldownMs}ms)`,
@@ -2194,14 +2197,16 @@ export default Plugin.define({
       })
       modelCooldowns.delete(outcome.model)
       if (outcome.model !== primary) {
-        const warnKey = `${sessionID ?? ""}|${primary}|${outcome.model}`
-        if (!warnedFallbacks.has(warnKey)) {
-          if (warnedFallbacks.size > 1000) warnedFallbacks.clear()
-          warnedFallbacks.add(warnKey)
-          console.log(`[jev] fallbacks: serving judgments with ${outcome.model}`)
-          emitJevWarning(
-            `jev: judgment model ${primary} is unavailable; using ${outcome.model}`,
-          )
+        console.log(`[jev] fallbacks: serving judgments with ${outcome.model}`)
+        if (fallbackNotify.enabled) {
+          const warnKey = `${sessionID ?? ""}|${primary}|${outcome.model}`
+          if (!warnedFallbacks.has(warnKey)) {
+            if (warnedFallbacks.size > 1000) warnedFallbacks.clear()
+            warnedFallbacks.add(warnKey)
+            emitJevWarning(
+              `jev: judgment model ${primary} is unavailable; using ${outcome.model}`,
+            )
+          }
         }
       }
       return { reply: outcome.value.reply, cached: outcome.value.cached, model: outcome.model }

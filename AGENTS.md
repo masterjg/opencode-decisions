@@ -48,10 +48,11 @@ them here.
   (402/408/425/429, 5xx/outage, network/timeout); 401, 403, unknown-model
   diagnostics, and caller aborts surface immediately, and an exhausted chain
   throws the primary's diagnostic. The failed model is demoted for
-  `fallbackCooldownMs` (default 1 h; 0 disables) before it is retried. Status
-  errors surface the endpoint's own diagnostic (401 credential rejection, 402
-  funds, 403 free-tier/pairing gate); new auth/HTTP code must preserve these
-  readings.
+  `fallbackCooldownMs` (default 1 h; 0 disables) before it is retried; the
+  "using fallback" warning toast can be silenced with `fallbackNotify: false`,
+  while chain-exhausted errors still surface. Status errors surface the
+  endpoint's own diagnostic (401 credential rejection, 402 funds, 403
+  free-tier/pairing gate); new auth/HTTP code must preserve these readings.
 - Credentials: env override first, then the CLI store - the `opencode auth
   export` subprocess channel, falling back to a direct read-only read of
   the db-backed store (`src/store-db.ts`) when the subprocess is

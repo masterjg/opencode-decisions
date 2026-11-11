@@ -46,6 +46,7 @@ Anything else is a fault: an unregistered provider, unreachable endpoint, or unv
 - `fallbackCooldownMs` sets that demotion window in milliseconds: default `3600000` (1 h), `0` retries the failed model on the next judged call, and values above `86400000` are clamped to 24 h. Invalid values keep the default. The cooldown is in-memory and resets on reload/restart.
 - Only retryable failures advance: 402 (funds, where a free model may still answer), 408/425/429, 5xx/outage, and network or timeout errors. 401 credential rejection, 403 gate, unknown-model diagnostics, and caller aborts surface immediately - another model on the same deployment cannot fix them.
 - When a fallback answers, one warning toast per session and model pair names it. If the whole chain fails, the primary's diagnostic surfaces, preserving the single-model fail-closed behavior.
+- `fallbackNotify` (default `true`) controls that warning toast. Set it to `false` to silence only the "using fallback" warning; the console log and chain-exhausted error toasts remain.
 - `/jev-models` still pins the session's primary; the configured fallbacks remain behind it.
 
 ## Credentials
