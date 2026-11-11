@@ -9,7 +9,7 @@ them here.
 ## Commands
 
 - `bun` is not on PATH: run tests as `nix shell nixpkgs#bun -c bun test`
-  (658 tests, 30 files, ~7 s). That plus `typecheck` is the entire
+  (660 tests, 30 files, ~7 s). That plus `typecheck` is the entire
   check — there is no linter, formatter, codegen, or CI config to hunt
   for, and no build step (OpenCode loads `src/index.ts` directly).
 - Typecheck: `nix shell nixpkgs#bun -c bun install` once (dev deps), then
