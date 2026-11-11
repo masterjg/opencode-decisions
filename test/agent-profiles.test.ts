@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   clampEffortLevels,
+  effectiveEffortMode,
   firstUsableModel,
   parseAgentProfiles,
   REVIEW_AGENT_CRITERIA,
@@ -74,6 +75,43 @@ describe("parseAgentProfiles: overrides", () => {
 
   test("minContext wins only as a floor; zero is a valid override", () => {
     expect(byID(parseAgentProfiles({ plan: { minContext: 0 } }).profiles, "plan")?.minContext).toBe(0)
+  })
+})
+
+describe("parseAgentProfiles: per-agent effort mode", () => {
+  test("effort false disables routing and clears the band", () => {
+    const { profiles, warnings } = parseAgentProfiles({ build: { effort: false } })
+    expect(byID(profiles, "build")?.effortMode).toBe("off")
+    expect(byID(profiles, "build")?.effort).toBeUndefined()
+    expect(warnings).toEqual([])
+  })
+
+  test("effort.mode overrides the global mode and keeps an existing band", () => {
+    const { profiles, warnings } = parseAgentProfiles({
+      plan: { effort: { mode: "always" } },
+      coordinator: { effort: { mode: "always", min: "medium", max: "xhigh" } },
+    })
+    expect(byID(profiles, "plan")?.effortMode).toBe("always")
+    expect(byID(profiles, "plan")?.effort).toEqual({ min: "medium" })
+    expect(byID(profiles, "coordinator")?.effortMode).toBe("always")
+    expect(byID(profiles, "coordinator")?.effort).toEqual({ min: "medium", max: "xhigh" })
+    expect(warnings).toEqual([])
+  })
+
+  test("an invalid effort.mode warns and leaves the global mode to apply", () => {
+    const { profiles, warnings } = parseAgentProfiles({ plan: { effort: { mode: "bogus" } } })
+    expect(byID(profiles, "plan")?.effortMode).toBeUndefined()
+    expect(byID(profiles, "plan")?.effort).toEqual({ min: "medium" })
+    expect(warnings.some((warning) => warning.includes("effort.mode"))).toBe(true)
+  })
+})
+
+describe("effectiveEffortMode", () => {
+  test("a profile mode overrides the global mode; absent inherits", () => {
+    expect(effectiveEffortMode("pair", { id: "build", effortMode: "always" })).toBe("always")
+    expect(effectiveEffortMode("always", { id: "build", effortMode: "off" })).toBe("off")
+    expect(effectiveEffortMode("always", { id: "build" })).toBe("always")
+    expect(effectiveEffortMode("pair", null)).toBe("pair")
   })
 })
 
@@ -329,5 +367,43 @@ describe("routeTurn: agent profiles", () => {
     )
     expect(offered).toEqual(["none", "low"])
     expect(outcome.switchTo?.variant).toBe("low")
+  })
+
+  test("a single offered level skips the judge and applies it", async () => {
+    let judged = false
+    const outcome = await turn(
+      { ...PAIR_CONFIG, model: false },
+      {
+        current: { providerID: "acme", modelID: "base", variant: "default" },
+        profile: { id: "build", effort: { max: "low" } },
+        levelsFor: async () => ["low", "high"],
+        judge: async () => {
+          judged = true
+          return { answers: {} }
+        },
+      },
+    )
+    expect(judged).toBe(false)
+    expect(outcome.switchTo).toEqual({ providerID: "acme", modelID: "base", variant: "low" })
+    expect(outcome.recordPin?.to?.variant).toBe("low")
+  })
+
+  test("a single offered level equal to the current variant does nothing", async () => {
+    let judged = false
+    const outcome = await turn(
+      { ...PAIR_CONFIG, model: false },
+      {
+        current: { providerID: "acme", modelID: "base", variant: "low" },
+        profile: { id: "build", effort: { max: "low" } },
+        levelsFor: async () => ["low", "high"],
+        judge: async () => {
+          judged = true
+          return { answers: {} }
+        },
+      },
+    )
+    expect(judged).toBe(false)
+    expect(outcome.switchTo).toBeUndefined()
+    expect(outcome.recordPin).toBeUndefined()
   })
 })

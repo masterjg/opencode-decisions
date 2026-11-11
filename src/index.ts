@@ -125,6 +125,7 @@ import {
   effectiveJevModel,
   emergencyRealModel,
   effortRoutingEnabled,
+  effectiveEffortMode,
   type EffortMode,
   type GoPlan,
   idleSessionID,
@@ -2367,11 +2368,12 @@ export default Plugin.define({
                     )?.trim()
                     const profile = agentID ? agentProfiles.get(agentID) : undefined
                     if (profile?.minContext) agentFloor = profile.minContext
+                    const resolvedMode = effectiveEffortMode(effortMode, profile ?? null)
                     const routing = entry
-                      ? effortRoutingEnabled(effortMode, true)
+                      ? effortRoutingEnabled(resolvedMode, true)
                         ? "model + effort"
                         : "model"
-                      : effortAlways
+                      : resolvedMode === "always"
                         ? "effort only"
                         : "off"
                     session = {
@@ -2860,11 +2862,12 @@ export default Plugin.define({
           // manual pick IS the stand-down, no pin bookkeeping needed.
           const entry = pseudoEntryFor(routeEntries, model)
           const atAutoEntry = !!entry
-          if (!atAutoEntry && !effortAlways) return
+          const resolvedEffortMode = effectiveEffortMode(effortMode, agentProfile)
+          if (!atAutoEntry && resolvedEffortMode !== "always") return
           // Entries pair model and effort by default; `"always"` also routes
           // a hand-picked model's effort, and `"off"` keeps entries
-          // model-only.
-          const effortEnabled = effortRoutingEnabled(effortMode, atAutoEntry)
+          // model-only. An agent profile can override the global mode.
+          const effortEnabled = effortRoutingEnabled(resolvedEffortMode, atAutoEntry)
 
           const currentRef = {
             providerID: model.providerID,

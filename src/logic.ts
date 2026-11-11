@@ -601,6 +601,15 @@ export function effortRoutingEnabled(mode: EffortMode, atEntry: boolean): boolea
   return atEntry
 }
 
+/** Resolves the global effort mode against an agent profile's per-agent
+ * override. Absent profile mode inherits the global setting. */
+export function effectiveEffortMode(
+  globalMode: EffortMode,
+  profile?: AgentRouteProfile | null,
+): EffortMode {
+  return profile?.effortMode ?? globalMode
+}
+
 // ---------------------------------------------------------------------------
 // Agent profiles (`agents`): the session's active OpenCode agent refines a
 // routing turn. The agent is the stance the user already chose, so it can
@@ -628,6 +637,10 @@ export interface AgentRouteProfile {
   minContext?: number
   /** Effort band applied to the options offered for this turn. */
   effort?: AgentEffortBand
+  /** Per-agent override of the global `effort.mode`. `off` disables effort
+   * routing for this agent; `always` enables it for a hand-picked model even
+   * when the global mode is `pair`. */
+  effortMode?: EffortMode
 }
 
 /** Built-in stances for OpenCode's own agents. `build` is the baseline and
@@ -728,7 +741,7 @@ function parseAgentEffort(
     warnings.push(`"agents.${id}.effort.max" is below "min" - ignoring the maximum`)
     delete band.max
   }
-  if (!band.min && !band.max) return "min" in raw || "max" in raw ? undefined : null
+  if (!band.min && !band.max) return "min" in raw || "max" in raw || "mode" in raw ? undefined : null
   return band
 }
 
@@ -783,9 +796,24 @@ export function parseAgentProfiles(raw: unknown): ParsedAgentProfiles {
       else warnings.push(`"agents.${key}.minContext" must be a non-negative number - ignored`)
     }
     if ("effort" in value) {
-      const effort = parseAgentEffort(value.effort, key, warnings)
-      if (effort === null) delete profile.effort
-      else if (effort !== undefined) profile.effort = effort
+      const rawEffort = value.effort
+      if (rawEffort === false) {
+        delete profile.effort
+        profile.effortMode = "off"
+      } else {
+        if (isRouteObject(rawEffort) && "mode" in rawEffort) {
+          if (rawEffort.mode === "always" || rawEffort.mode === "off" || rawEffort.mode === "pair") {
+            profile.effortMode = rawEffort.mode
+          } else {
+            warnings.push(
+              `"agents.${key}.effort.mode" must be "always", "pair", or "off" - ignored`,
+            )
+          }
+        }
+        const effort = parseAgentEffort(rawEffort, key, warnings)
+        if (effort === null) delete profile.effort
+        else if (effort !== undefined) profile.effort = effort
+      }
     }
     profiles.set(key, profile)
   }
@@ -2322,6 +2350,20 @@ export async function routeTurn(config: RouteConfig, input: RouteInput): Promise
         pickedLabel: picked,
         logs: [`[jev] effort: manual pick ${picked} - auto stood down until Default`],
         errors,
+      }
+    }
+    if (levels.length === 1) {
+      const only = levels[0]!
+      if (only === current) return { mode: "effort", logs, errors }
+      return {
+        mode: "effort",
+        logs: [`[jev] effort: ${current} → ${only} (single allowed level)`],
+        errors,
+        switchTo: { providerID: currentRef.providerID, modelID: currentRef.id, variant: only },
+        recordPin: {
+          to: { providerID: currentRef.providerID, id: currentRef.id, variant: only },
+          from: { providerID: currentRef.providerID, id: currentRef.id, variant: currentVariant },
+        },
       }
     }
     const question: QuestionLike = {
