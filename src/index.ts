@@ -124,6 +124,7 @@ import {
   doneVerdict,
   effectiveJevModel,
   parseModelChain,
+  parseFallbackCooldownMs,
   runModelChain,
   judgeFailureRetryable,
   emergencyRealModel,
@@ -1670,10 +1671,13 @@ export default Plugin.define({
     }
     const modelChain = parseModelChain(o.fallbacks, resolveModel())
     OPTIONS_FALLBACKS = modelChain.models.slice(1)
+    const fallbackCooldown = parseFallbackCooldownMs(o.fallbackCooldownMs)
+    const fallbackCooldownMs = fallbackCooldown.ms
     for (const warning of modelChain.warnings) console.log(`[jev] fallbacks: ${warning}`)
+    if (fallbackCooldown.warning) console.log(`[jev] fallbacks: ${fallbackCooldown.warning}`)
     if (OPTIONS_FALLBACKS.length > 0) {
       console.log(
-        `[jev] fallbacks: ${OPTIONS_FALLBACKS.join(", ")} (tried in order on retryable failures)`,
+        `[jev] fallbacks: ${OPTIONS_FALLBACKS.join(", ")} (tried in order on retryable failures; cooldown ${fallbackCooldownMs}ms)`,
       )
     }
     const providerOption = parseProviderOption(o.provider)
@@ -2126,10 +2130,10 @@ export default Plugin.define({
       return model || undefined
     }
 
-    // A retryable judged failure demotes that model briefly, so a rate-limited
-    // primary does not cost an extra failed request on every turn. The last
-    // chain member is always attempted (something has to run).
-    const MODEL_COOLDOWN_MS = 60_000
+    // A retryable judged failure demotes that model for the configured
+    // cooldown, so a rate-limited primary does not cost an extra failed request
+    // on every turn. The last chain member is always attempted.
+    const MODEL_COOLDOWN_MS = fallbackCooldownMs
     const modelCooldowns = new Map<string, number>()
     const warnedFallbacks = new Set<string>()
 

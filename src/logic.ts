@@ -3553,6 +3553,36 @@ export function parseModelChain(
   return { models, warnings }
 }
 
+/** Default cooldown for a model that failed retryably during a judged call:
+ * one hour, so a rate-limited primary is not hammered on every turn. */
+export const FALLBACK_COOLDOWN_MS_DEFAULT = 3_600_000
+/** Upper bound for `fallbackCooldownMs`: one day. */
+export const FALLBACK_COOLDOWN_MS_MAX = 86_400_000
+
+/**
+ * Parses the `fallbackCooldownMs` plugin option. Accepts a non-negative finite
+ * number of milliseconds, floors fractions, and clamps to one day. A missing
+ * value keeps the one-hour default; zero disables the cooldown so the failed
+ * model is retried on the next call.
+ */
+export function parseFallbackCooldownMs(raw: unknown): { ms: number; warning?: string } {
+  if (raw === undefined) return { ms: FALLBACK_COOLDOWN_MS_DEFAULT }
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
+    return {
+      ms: FALLBACK_COOLDOWN_MS_DEFAULT,
+      warning: `"fallbackCooldownMs" must be a non-negative number - keeping ${FALLBACK_COOLDOWN_MS_DEFAULT}`,
+    }
+  }
+  const floored = Math.floor(raw)
+  if (floored > FALLBACK_COOLDOWN_MS_MAX) {
+    return {
+      ms: FALLBACK_COOLDOWN_MS_MAX,
+      warning: `"fallbackCooldownMs" clamped to ${FALLBACK_COOLDOWN_MS_MAX}`,
+    }
+  }
+  return { ms: floored }
+}
+
 /** One deployment verdict, structurally compatible with the host-side
  * DeployVerdict (kept local so logic.ts stays host-free). */
 export interface ModelVerdictLike {

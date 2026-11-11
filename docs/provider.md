@@ -42,7 +42,8 @@ Anything else is a fault: an unregistered provider, unreachable endpoint, or unv
 ```
 
 - The chain is the effective primary - a `/jev-models` session pin, else `model` / `JEV_MODEL` / the baked default - followed by the fallbacks, trimmed and de-duplicated in order.
-- Each fallback is ping-verified at startup and skipped when it does not answer, so a dead primary does not cost a failed judged call on every turn. A model that fails retryably during a judged call is demoted for 60 s for the same reason.
+- Each fallback is ping-verified at startup and skipped when it does not answer, so a dead primary does not cost a failed judged call on every turn. A model that fails retryably during a judged call is demoted for the configured cooldown for the same reason.
+- `fallbackCooldownMs` sets that demotion window in milliseconds: default `3600000` (1 h), `0` retries the failed model on the next judged call, and values above `86400000` are clamped to 24 h. Invalid values keep the default. The cooldown is in-memory and resets on reload/restart.
 - Only retryable failures advance: 402 (funds, where a free model may still answer), 408/425/429, 5xx/outage, and network or timeout errors. 401 credential rejection, 403 gate, unknown-model diagnostics, and caller aborts surface immediately - another model on the same deployment cannot fix them.
 - When a fallback answers, one warning toast per session and model pair names it. If the whole chain fails, the primary's diagnostic surfaces, preserving the single-model fail-closed behavior.
 - `/jev-models` still pins the session's primary; the configured fallbacks remain behind it.

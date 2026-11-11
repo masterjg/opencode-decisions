@@ -1112,9 +1112,10 @@ fail-closed stance:
 - The whole chain is ping-verified at startup. A member that does not answer
   is cached as faulted and skipped; the init config fault fires only when no
   member answers, and it keeps the primary's wording.
-- A judged call that fails retryably demotes that model for 60 seconds, so a
-  rate-limited primary is not re-hit on every turn. The last member is always
-  attempted - something has to run.
+- A judged call that fails retryably demotes that model for
+  `fallbackCooldownMs` (default 1 h; 0 disables), so a rate-limited primary is
+  not re-hit on every turn. The last member is always attempted - something has
+  to run.
 - The first retryable failure advances and emits one warning toast per
   session and model pair, naming both models. If the chain is exhausted, the
   primary's diagnostic is thrown, so single-model callers see exactly the

@@ -4,7 +4,10 @@
 
 import { describe, expect, test } from "bun:test"
 import {
+  FALLBACK_COOLDOWN_MS_DEFAULT,
+  FALLBACK_COOLDOWN_MS_MAX,
   judgeFailureRetryable,
+  parseFallbackCooldownMs,
   parseModelChain,
   runModelChain,
   type ModelVerdictLike,
@@ -51,6 +54,32 @@ describe("parseModelChain", () => {
 
   test("an empty array is valid and keeps the primary", () => {
     expect(parseModelChain([], "a")).toEqual({ models: ["a"], warnings: [] })
+  })
+})
+
+describe("parseFallbackCooldownMs", () => {
+  test("defaults to one hour", () => {
+    expect(parseFallbackCooldownMs(undefined)).toEqual({ ms: FALLBACK_COOLDOWN_MS_DEFAULT })
+    expect(FALLBACK_COOLDOWN_MS_DEFAULT).toBe(3_600_000)
+  })
+
+  test("accepts zero and floors fractions", () => {
+    expect(parseFallbackCooldownMs(0)).toEqual({ ms: 0 })
+    expect(parseFallbackCooldownMs(1500.9)).toEqual({ ms: 1500 })
+  })
+
+  test("invalid values keep the default and warn", () => {
+    for (const raw of [-1, "60000", Number.NaN, Number.POSITIVE_INFINITY]) {
+      const parsed = parseFallbackCooldownMs(raw)
+      expect(parsed.ms).toBe(FALLBACK_COOLDOWN_MS_DEFAULT)
+      expect(parsed.warning).toContain("non-negative number")
+    }
+  })
+
+  test("clamps above one day", () => {
+    const parsed = parseFallbackCooldownMs(FALLBACK_COOLDOWN_MS_MAX + 1)
+    expect(parsed.ms).toBe(FALLBACK_COOLDOWN_MS_MAX)
+    expect(parsed.warning).toContain("clamped")
   })
 })
 
